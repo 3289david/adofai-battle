@@ -32,9 +32,7 @@ export interface SessionUser {
 }
 
 /**
- * Login via ADOFAI.NET — proxies credentials to adofai.net/api/auth/login,
- * which uses email+password and sets an httpOnly JWT cookie (auth_token).
- * Then fetches profile from /api/auth/me to create/link a local user account.
+ * Deprecated: password login to adofai.net. Use OAuth via `finalizeOAuthAndCreateSession`.
  */
 export async function loginWithAdofaiNet(
   email: string,
@@ -118,6 +116,58 @@ export async function loginWithAdofaiNet(
     return { user: sessionUser, adofaiToken };
   } catch (e) {
     return { error: "Failed to connect to ADOFAI.NET" };
+  }
+}
+
+export type IdpUserInfo = {
+  sub: string;
+  email?: string;
+  preferred_username?: string;
+  username?: string;
+};
+
+/** After OAuth token exchange + userinfo — link local SQLite row and set session cookie. */
+export async function finalizeOAuthAndCreateSession(
+  profile: IdpUserInfo
+): Promise<{ user: SessionUser } | { error: string }> {
+  try {
+    const db = getDb();
+    const adofaiNetId = String(profile.sub);
+    const displayName =
+      profile.preferred_username || profile.username || profile.email?.split("@")[0] || "player";
+    const avatarUrl: string | null = null;
+
+    let localUser = db.prepare("SELECT * FROM users WHERE adofai_net_id = ?").get(adofaiNetId) as Record<string, unknown> | undefined;
+
+    if (!localUser) {
+      localUser = db.prepare("SELECT * FROM users WHERE username = ?").get(displayName) as Record<string, unknown> | undefined;
+
+      if (localUser) {
+        db.prepare("UPDATE users SET adofai_net_id = ?, avatar_url = ?, updated_at = datetime('now') WHERE id = ?")
+          .run(adofaiNetId, avatarUrl, localUser.id);
+      } else {
+        const id = uuid();
+        db.prepare(`INSERT INTO users (id, adofai_net_id, username, avatar_url) VALUES (?, ?, ?, ?)`).run(
+          id,
+          adofaiNetId,
+          displayName,
+          avatarUrl
+        );
+        localUser = db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
+      }
+    } else {
+      db.prepare("UPDATE users SET avatar_url = ?, updated_at = datetime('now') WHERE id = ?").run(avatarUrl, localUser.id);
+    }
+
+    if ((localUser.ban_status as string) === "banned") {
+      return { error: "Your account is banned: " + ((localUser.ban_reason as string) || "Contact moderator") };
+    }
+
+    const sessionUser = rowToSessionUser(localUser);
+    await createSession(sessionUser.id, undefined);
+    return { user: sessionUser };
+  } catch {
+    return { error: "OAuth session failed." };
   }
 }
 

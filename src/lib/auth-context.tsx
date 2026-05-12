@@ -25,7 +25,8 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<{ error?: string }>;
+  /** Redirects to OAuth (auth.adofai.net). Legacy email/password path removed. */
+  login: () => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   isAdmin: boolean;
@@ -58,16 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh]);
 
-  const login = async (email: string, password: string) => {
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) return { error: data.error };
-    await refresh();
-    return {};
+  const login = async () => {
+    const next = encodeURIComponent("/battle");
+    window.location.href = `/api/auth/oauth/start?next=${next}`;
   };
 
   const logout = async () => {
